@@ -1,0 +1,32 @@
+# Single-container image for a free Render web service (demo only).
+# Runs Temporal dev server (in-memory), Redis, the worker and the API together.
+# For a real setup use docker-compose.yml (separate services).
+
+FROM node:20-bookworm-slim AS build
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci --no-audit --no-fund
+COPY tsconfig.json tsconfig.build.json ./
+COPY src ./src
+RUN npm run build && npm prune --omit=dev
+
+FROM node:20-bookworm-slim
+ENV NODE_ENV=production
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends redis-server curl ca-certificates \
+ && curl -sSfL "https://temporal.download/cli/archive/latest?platform=linux&arch=amd64" -o /tmp/temporal.tgz \
+ && tar -xzf /tmp/temporal.tgz -C /usr/local/bin temporal \
+ && rm /tmp/temporal.tgz \
+ && apt-get purge -y curl && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY --from=build /app/package*.json ./
+COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/dist ./dist
+COPY render-start.sh ./render-start.sh
+RUN chmod +x render-start.sh && chown -R node:node /app
+USER node
+ENV PORT=10000 \
+    TEMPORAL_ADDRESS=127.0.0.1:7233 \
+    REDIS_URL=redis://127.0.0.1:6379
+EXPOSE 10000
+CMD ["./render-start.sh"]
